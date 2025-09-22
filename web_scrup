@@ -1,0 +1,84 @@
+from __future__ import annotations
+import re
+import sys
+from urllib.parse import urljoin
+
+
+import requests
+from bs4 import BeautifulSoup
+
+# Определяем список ключевых слов:
+KEYWORDS = ['дизайн', 'фото', 'web', 'python']
+
+URL = "https://habr.com/ru/articles/"
+
+def fetch_html(url: str) -> str:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept-Language": "ru,en;q=0.9",
+    }
+    resp = requests.get(url, headers=headers, timeout=20)
+    resp.raise_for_status()
+    resp.encoding = "utf-8"
+    return resp.text
+
+def extract_articles(html: str):
+    soup = BeautifulSoup(html, "html.parser")
+    # На странице свежих статей карточки представлены как <article>
+    # Используем широкий селектор, чтобы меньше зависеть от изменений классов.
+    return soup.select("article")
+
+def article_info(card) -> tuple[str, str, str] | None:
+    # Заголовок и ссылка
+    title_link = card.select_one("a.tm-title__link") or card.select_one("h2 a")
+    if not title_link or not title_link.get("href"):
+        return None
+
+    title = title_link.get_text(" ", strip=True)
+    link = urljoin(URL, title_link["href"])
+
+    # Дата публикации
+    time_tag = card.select_one("time")
+    if time_tag and time_tag.has_attr("datetime"):
+        # datetime в ISO-формате, берем только дату (YYYY-MM-DD)
+        date = time_tag["datetime"].split("T", 1)[0]
+    else:
+        # запасной вариант – берем видимый текст даты
+        date = time_tag.get_text(" ", strip=True) if time_tag else "—"
+
+    return date, title, link
+
+def card_matches_keywords(card, keywords: list[str]) -> bool:
+    # Собираем весь видимый текст карточки
+    text = card.get_text(" ", strip=True).lower()
+    return any(kw.lower() in text for kw in keywords)
+
+def main():
+    try:
+        html = fetch_html(URL)
+    except requests.RequestException as e:
+        print(f"Ошибка запроса: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    cards = extract_articles(html)
+    if not cards:
+        print("Не удалось найти статьи на странице.", file=sys.stderr)
+        sys.exit(1)
+
+    results = []
+    for card in cards:
+        if card_matches_keywords(card, KEYWORDS):
+            info = article_info(card)
+            if info:
+                results.append(info)
+
+    # Вывод в требуемом формате
+    for date, title, link in results:
+        print(f"{date} – {title} – {link}")
+
+if __name__ == "__main__":
+    main()
